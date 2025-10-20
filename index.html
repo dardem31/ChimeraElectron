@@ -1,0 +1,240 @@
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <title>ChimeraUI</title>
+    <link rel="stylesheet" href="assets/css/style.css"/>
+    <link rel="stylesheet" href="assets/css/topbar.css"/>
+    <script defer src="assets/js/renderer.js"></script>
+</head>
+<body>
+<div id="controls">
+    <button id="home" title="Go Home">Home</button>
+    <button id="record-button" class="idle" title="Start recording">⏺ Start</button>
+    <span id="record-status">Idle</span>
+    <button id="inspect-webview">Inspect Webview</button>
+    <input id="url-bar" type="text" placeholder="Enter URL or search..." style="width:60%"/>
+    <button id="go-button">Go</button>
+    <button id="open-sessions" title="Show saved sessions" style="margin-left:10px;">Sessions</button>
+    <button id="toggle-highlighter" style="margin-left:10px;">Toggle Highlight</button>
+</div>
+
+<webview
+        id="main-webview"
+        src="https://www.example.com/"
+        preload="webview/preload-highlighter.js"
+        partition="persist:proxy-session"
+        style="width:100vw;height:100vh;border:none"
+        useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+></webview>
+
+<!-- Simple Modal -->
+<dialog id="sessions-dialog" style="width:600px;max-height:80vh;padding:20px;border-radius:8px;">
+    <h3>Saved Sessions</h3>
+    <div id="sessions-list" style="margin-top:10px;overflow-y:auto;max-height:60vh;"></div>
+    <button id="close-sessions" style="margin-top:15px;">Close</button>
+</dialog>
+
+<script>
+    const webview = document.getElementById("main-webview");
+    const urlBar = document.getElementById("url-bar");
+    const goButton = document.getElementById("go-button");
+    const homeButton = document.getElementById("home");
+
+    const recordBtn = document.getElementById("record-button");
+    const recordStatus = document.getElementById("record-status");
+    let isRecording = false;
+
+    // Загружаем домашнюю страницу
+    homeButton.addEventListener("click", () => {
+        webview.src = "https://www.example.com/";
+    });
+
+    // Кнопка Go
+    goButton.addEventListener("click", () => {
+        navigate(urlBar.value);
+    });
+
+    // Enter в поисковой строке
+    urlBar.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            navigate(urlBar.value);
+        }
+    });
+
+    function navigate(input) {
+        let url = input.trim();
+        if (!url) return;
+
+        // Если не похоже на URL — делаем поиск
+        if (!/^https?:\/\//i.test(url)) {
+            if (url.includes(".")) {
+                url = "https://" + url; // домен без протокола
+            } else {
+                url = "https://duckduckgo.com/?q=" + encodeURIComponent(url);
+            }
+        }
+        webview.src = url;
+    }
+
+    // Автообновление адресной строки при переходе
+    webview.addEventListener("did-navigate", (e) => {
+        urlBar.value = e.url;
+    });
+
+    webview.addEventListener("did-start-navigation", (e) => {
+        console.log("Loading:", e.url);
+    });
+
+    webview.addEventListener("did-fail-load", (e) => {
+        console.error("Error:", e.errorCode, e.errorDescription);
+        if (e.errorCode === -3 || e.errorCode === -105) {
+            webview.src = "https://duckduckgo.com/?q=test";
+        }
+    });
+    document.getElementById("inspect-webview").addEventListener("click", () => {
+        webview.openDevTools();
+    });
+
+    // --- Start / Stop recording button logic ---
+    recordBtn.addEventListener("click", async () => {
+        if (!isRecording) {
+            // START
+            isRecording = true;
+            recordBtn.textContent = "⏹ Stop";
+            recordBtn.classList.remove("idle");
+            recordBtn.classList.add("recording");
+            recordStatus.textContent = "Recording…";
+            urlBar.disabled = true;
+
+            // Генерируем имя сессии — можно заменить UI prompt или форму
+            let sessionName = await webview.executeJavaScript('document.title', true);
+            const currentUrl = webview.getURL ? webview.getURL() : urlBar.value || '';
+
+            // Вызов через exposeInMainWorld API (preload.js)
+            try {
+                const result = await window.electronAPI.sessionManagement.openSession(sessionName, currentUrl);
+                if (result?.success) {
+                    urlBar.disabled = true;
+                    goButton.disabled = true;
+                    homeButton.disabled = true;
+
+                    console.log("Session started:", sessionName);
+                    webview.reloadIgnoringCache();
+                } else {
+                    console.error("Failed to start session:", result?.error);
+                }
+            } catch (err) {
+                console.error('Failed to start session', err);
+                // Откатываем UI
+                isRecording = false;
+                recordBtn.textContent = "⏺ Start";
+                recordBtn.classList.remove("recording");
+                recordBtn.classList.add("idle");
+                recordStatus.textContent = "Idle (error)";
+                urlBar.disabled = false;
+                alert('Не удалось начать запись: ' + (err && err.message ? err.message : String(err)));
+            }
+
+        } else {
+            // STOP
+            isRecording = false;
+            recordBtn.textContent = "⏺ Start";
+            recordBtn.classList.remove("recording");
+            recordBtn.classList.add("idle");
+            recordStatus.textContent = "Stopping…";
+
+            try {
+                const result = await window.electronAPI.sessionManagement.closeSession();
+                console.log('Session stopped', result);
+                recordStatus.textContent = "Saved";
+                // обновляем UI: разблокируем URL
+                urlBar.disabled = false;
+
+                // Покажем короткое уведомление (можно заменить на toast)
+                setTimeout(() => { recordStatus.textContent = "Idle"; }, 1500);
+
+            } catch (err) {
+                console.error('Failed to stop session', err);
+                recordStatus.textContent = "Error stopping";
+                alert('Не удалось остановить запись: ' + (err && err.message ? err.message : String(err)));
+                urlBar.disabled = false;
+            }
+        }
+    });
+</script>
+<script>
+    const openSessionsButton = document.getElementById("open-sessions");
+    const sessionsDialog = document.getElementById("sessions-dialog");
+    const sessionsList = document.getElementById("sessions-list");
+    const closeSessionsButton = document.getElementById("close-sessions");
+    const toggleHighlighterButton = document.getElementById("toggle-highlighter");
+
+    openSessionsButton.addEventListener("click", async () => {
+        try {
+            const result = await window.electronAPI.sessionManagement.listSessions();
+            const sessions = result.sessionList
+            sessionsList.innerHTML = "";
+            console.log(sessions)
+            if (sessions.length === 0) {
+                sessionsList.innerHTML = "<p>No saved sessions yet.</p>";
+            } else {
+                for (const session of sessions) {
+                    const div = document.createElement("div");
+                    div.className = "session-item";
+                    div.style = "padding:8px;border-bottom:1px solid #ccc;display:flex;justify-content:space-between;align-items:center;";
+
+                    const info = document.createElement("div");
+                    info.innerHTML = `
+                        <strong>${session.name}</strong><br>
+                        <small>${new Date(session.createTime).toLocaleString()} — <a href="${session.url}" target="_blank">${session.url}</a></small>
+                    `;
+
+                    const buttons = document.createElement("div");
+                    buttons.style = "display:flex;gap:8px;";
+
+                    // 🔹 Replay button
+                    const replayBtn = document.createElement("button");
+                    replayBtn.textContent = "▶ Replay";
+                    replayBtn.title = "Replay this session";
+                    replayBtn.addEventListener("click", async (e) => {
+                        e.stopPropagation();
+                        let replaySessionResponse = await window.electronAPI.sessionManagement.replaySession(session.id);
+                        let replaySession = replaySessionResponse.session;
+                        console.log("Replaying session:", replaySession);
+                        webview.src = replaySession.firstPageUrl;
+                        sessionsDialog.close();
+                    });
+
+                    // 🔹 Open button (navigate directly)
+                    const openBtn = document.createElement("button");
+                    openBtn.textContent = "Open";
+                    openBtn.title = "Open session URL";
+                    openBtn.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        navigate(session.url);
+                        sessionsDialog.close();
+                    });
+
+                    buttons.appendChild(replayBtn);
+                    buttons.appendChild(openBtn);
+                    div.appendChild(info);
+                    div.appendChild(buttons);
+                    sessionsList.appendChild(div);
+                }
+            }
+            sessionsDialog.showModal();
+        } catch (err) {
+            console.error("Failed to load sessions:", err);
+        }
+    });
+
+    closeSessionsButton.addEventListener("click", () => sessionsDialog.close());
+
+    toggleHighlighterButton.addEventListener("click", () => {
+        webview.executeJavaScript(
+            "window.__chimeraHighlighterToggle && window.__chimeraHighlighterToggle();"
+        );
+    });
+</script>
+</body>
+</html>
