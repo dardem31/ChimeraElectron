@@ -1,28 +1,49 @@
 {
   "name": "electron-webview",
-  "productName": "Electron webview",
+  "productName": "ChimeraUI",
   "version": "1.0.0",
   "description": "A simple Electron webview application",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "dist": "electron-builder",
     "package-mac": "npx electron-packager . --overwrite --platform=darwin --arch=arm64 --icon=assets/icons/mac/icon.icns --prune=true --out=release-builds",
-    "package-win": "npx electron-packager . --overwrite --asar=true --platform=win32 --arch=ia32 --icon=assets/icons/win/icon.ico --prune=true --out=release-builds --version-string.CompanyName=CE --version-string.FileDescription=CE --version-string.ProductName=\"Electron Webview\"",
+    "package-win": "electron-builder --win --ia32",
+    "package-win-portable": "electron-builder --win --ia32 --portable",
     "package-linux": "npx electron-packager . --overwrite --platform=linux --arch=x64 --icon=assets/icons/png/1024x1024.png --prune=true --out=release-builds",
     "create-installer-mac": "npx electron-installer-dmg ./release-builds/Electron\\ webview-darwin-arm64/Electron\\ webview.app electron-webview --out=release-builds --overwrite --icon=assets/icons/mac/icon.icns"
   },
-  "repository": "https://github.com/cba85/electron-webview",
+  "build": {
+    "appId": "by.dardem.chimera",
+    "productName": "ElectronWebview",
+    "files": [
+      "**/*",
+      "!node_modules/*.md",
+      "!dist-tests"
+    ],
+    "win": {
+      "icon": "assets/icons/win/icon.ico",
+      "target": [
+        "portable"
+      ]
+    },
+    "linux": {
+      "icon": "assets/icons/png",
+      "target": ["AppImage"]
+    }
+  },
   "keywords": [
     "Electron",
     "webview",
     "tutorial",
     "demo"
   ],
-  "author": "GitHub",
-  "license": "MIT",
   "devDependencies": {
     "electron": "^34.0.0",
-    "electron-installer-dmg": "^4.0.0"
+    "electron-builder": "^26.0.12",
+    "electron-installer-dmg": "^4.0.0",
+    "electron-packager": "^17.1.2",
+    "electron-rebuild": "^3.2.9"
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",

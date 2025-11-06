@@ -1,7 +1,8 @@
 const {
     openSession,
     closeSession,
-    replaySession
+    replaySession,
+    stopReplayingSession
 } = require('../cert_utils/proxy-server');
 const sessionService = require("../services/SessionService");
 
@@ -48,10 +49,13 @@ class SessionController {
             return {success: false, error: error.message};
         }
     }
-    promptContent(event, html) {
+
+    stopReplayingSession(event, sessionId) {
         try {
-            console.log(`HTML: ${html}`)
-            return {success: true};
+            let session = sessionService.findById(sessionId);
+            console.log(session)
+            stopReplayingSession(session)
+            return {success: true, session: session};
         } catch (error) {
             console.error('Failed to get session: ', error)
             return {success: false, error: error.message};

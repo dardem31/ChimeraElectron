@@ -43,10 +43,33 @@ window.addEventListener("DOMContentLoaded", () => {
             });
     }
 });
-webview.addEventListener("ipc-message", (event) => {
+webview.addEventListener("ipc-message", async (event) => {
     if (event.channel === "chimera-element-selected") {
-        const html = event.args[0];
-        console.log("[chimera] HTML received from webview:", html);
-        window.electronAPI.forwardHtmlSelection(html);
+        const detail = event.args[0];
+        console.log("[chimera] Element info received from webview:", detail);
+        try {
+            // Отправляем на backend через electronAPI (preload)
+            const response = await window.electronAPI.forwardHtmlSelection(detail);
+            if (!response.success) {
+                throw new Error('Failed to process prompt!')
+            }
+            const result = response.result;
+
+            console.log("[chimera] Response from AI:", result);
+
+            // Проверяем, что модель вернула JS_ACTION
+            if (result?.type === "JS_ACTION" && result.jsCode) {
+                // Выполняем JS в webview
+                webview.executeJavaScript(result.jsCode)
+                    .then(() => console.log("[chimera] JS executed successfully"))
+                    .catch(err => console.error("[chimera] Error executing JS:", err));
+            } else if (result?.type === "ERROR") {
+                console.error("[chimera] AI returned error:", result.message);
+            } else {
+                console.log("[chimera] AI response type:", result?.type);
+            }
+        } catch (err) {
+            console.error("[chimera] Failed to process AI response:", err);
+        }
     }
 });

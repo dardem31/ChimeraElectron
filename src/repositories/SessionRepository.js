@@ -12,6 +12,7 @@ class SessionRepository {
         this.findByIdStmt = db.prepare(`SELECT s.*, nl.filePath FROM session s 
            INNER JOIN net_log nl ON nl.session_id = s.id
            WHERE s.id = ? AND nl.filePath is not NULL
+           ORDER BY nl.id
            LIMIT 1`);
     }
 

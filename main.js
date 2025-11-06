@@ -2,13 +2,15 @@
 const {app, session, BrowserWindow, ipcMain} = require("electron");
 const {createProxyServer} = require('./src/cert_utils/proxy-server');
 const sessionController = require('./src/controllers/SessionController')
+const aiController = require('./src/controllers/AiController')
 const path = require("path");
 
 ipcMain.handle('session:open', sessionController.startSession.bind(sessionController))
 ipcMain.handle('session:close', sessionController.closeSession.bind(sessionController))
 ipcMain.handle('session:list', sessionController.listSessions.bind(sessionController))
 ipcMain.handle('session:replay', sessionController.replaySession.bind(sessionController))
-ipcMain.handle('prompt:content', sessionController.promptContent.bind(sessionController))
+ipcMain.handle('session:stop_replay', sessionController.stopReplayingSession.bind(sessionController))
+ipcMain.handle('prompt:content', aiController.promptEditPage.bind(aiController))
 
 app.whenReady().then(async () => {
     await createProxyServer(8078);

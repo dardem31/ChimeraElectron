@@ -12,8 +12,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
         openSession: (name, url) => ipcRenderer.invoke('session:open', name, url),
         closeSession: () => ipcRenderer.invoke('session:close'),
         listSessions: () => ipcRenderer.invoke('session:list'),
-        replaySession: (sessionId) => ipcRenderer.invoke('session:replay', sessionId)
+        replaySession: (sessionId) => ipcRenderer.invoke('session:replay', sessionId),
+        stopReplayingSession: (sessionId) => ipcRenderer.invoke('session:stop_replay', sessionId)
     },
     getHighlighterCode: () => highlighterCode,
-    forwardHtmlSelection: (html) => ipcRenderer.invoke('prompt:content', html)
+    forwardHtmlSelection: (detail) => ipcRenderer.invoke('prompt:content', detail)
 });

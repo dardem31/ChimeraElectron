@@ -22,6 +22,8 @@
         id="main-webview"
         src="https://www.example.com/"
         preload="webview/preload-highlighter.js"
+        nodeIntegration="false"
+
         partition="persist:proxy-session"
         style="width:100vw;height:100vh;border:none"
         useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -157,8 +159,11 @@
                 console.error('Failed to stop session', err);
                 recordStatus.textContent = "Error stopping";
                 alert('Не удалось остановить запись: ' + (err && err.message ? err.message : String(err)));
-                urlBar.disabled = false;
             }
+            urlBar.disabled = false;
+            goButton.disabled = false;
+            homeButton.disabled = false;
+
         }
     });
 </script>
@@ -201,8 +206,17 @@
                         let replaySessionResponse = await window.electronAPI.sessionManagement.replaySession(session.id);
                         let replaySession = replaySessionResponse.session;
                         console.log("Replaying session:", replaySession);
-                        webview.src = replaySession.firstPageUrl;
+                        webview.src = replaySession.url;
+                        webview.addEventListener('dom-ready', () => {
+                            // Внедряем скрипт highlighter.js
+                            webview.executeJavaScript(window.electronAPI.getHighlighterCode()).catch(err => console.error('Failed to inject script:', err));
+                        });
                         sessionsDialog.close();
+                        let stopReplayingFn = function () {
+                            window.electronAPI.sessionManagement.stopReplayingSession(session.id);
+                            homeButton.removeEventListener("click", stopReplayingFn)
+                        }
+                        homeButton.addEventListener("click", stopReplayingFn)
                     });
 
                     // 🔹 Open button (navigate directly)

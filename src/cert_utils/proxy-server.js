@@ -32,6 +32,9 @@ function replaySession(session) {
     REPLAY_SESSION_NET_LOG = netLogService.getAllSessionLogs(session.id);
     console.log(REPLAY_SESSION_NET_LOG)
 }
+function stopReplayingSession() {
+    REPLAY_SESSION_NET_LOG = []
+}
 
 function ensureSafeName(name) {
     return name.replace(/[^a-z0-9\-_\.]/gi, "_");
@@ -260,160 +263,148 @@ async function createProxyServer(port) {
     });
 
     server.on('connect', (req, clientSocket, head) => {
-        console.log('Connected')
-        const [hostname, port] = req.url.split(':');
-        console.log(`HTTPS CONNECT to ${hostname}:${port || 443}`);
+        console.log('HTTPS CONNECT', req.url);
+        const [hostname, portStr] = req.url.split(':');
+        const targetPort = parseInt(portStr, 10) || 443;
 
-        const serverSocket = net.connect(port || 443, hostname, () => {
-            if (!SNI_CACHE.has(hostname)) {
-                const {cert, key} = generateCertForDomain(hostname, caKey, caCert);
-                SNI_CACHE.set(hostname, {cert, key});
+        // Создаём/получаем сертификат
+        if (!SNI_CACHE.has(hostname)) {
+            const {cert, key} = generateCertForDomain(hostname, caKey, caCert);
+            SNI_CACHE.set(hostname, {cert, key});
+        }
+        const {cert, key} = SNI_CACHE.get(hostname);
+
+        // Локальный TLS сервер, который "обслуживает" клиентский TLS поток
+        const fakeServer = https.createServer({ cert, key }, (proxyReq, proxyRes) => {
+            // Сформировать requestUrl
+            const requestUrl = (() => {
+                try { return new URL("https://" + hostname + proxyReq.url).toString(); }
+                catch (e) { return `https://${hostname}${proxyReq.url}`; }
+            })();
+
+            console.log('Incoming proxied request:', requestUrl);
+
+            // 1) Если есть запись в REPLAY_SESSION_NET_LOG -> восстановить и ответить
+            if (REPLAY_SESSION_NET_LOG != null) {
+                const netLog = REPLAY_SESSION_NET_LOG.find(n => n.url === requestUrl);
+                if (netLog) {
+                    console.log('Serving from REPLAY:', requestUrl);
+                    return sendNetLogResponse(netLog, proxyRes);
+                }
             }
 
-            const {cert, key} = SNI_CACHE.get(hostname);
-            const fakeServer = https.createServer({cert, key}, (proxyReq, proxyRes) => {
-                // 1. Собираем заголовки оригинального запроса
-                const options = {
-                    hostname: hostname,
-                    port: port || 443,
-                    path: proxyReq.url,
-                    method: proxyReq.method,
-                    headers: {...proxyReq.headers}
-                };
+            // 2) Попытаться найти сохранённый статический файл на диске
+            try {
+                const urlObj = new URL(requestUrl);
+                const savedPath = getSavedStaticFilePath(urlObj.hostname, urlObj.pathname); // Реализуй функцию, которая по hostname+pathname возвращает путь файла или null
+                if (savedPath && fs.existsSync(savedPath)) {
+                    const content = fs.readFileSync(savedPath);
+                    const contentType = mime.getType(savedPath) || 'application/octet-stream';
+                    proxyRes.writeHead(200, { 'content-type': contentType });
+                    proxyRes.end(content);
+                    return;
+                }
+            } catch (e) {
+                // ignore
+            }
 
-                // 2. Удаляем проблемные заголовки
-                delete options.headers["accept-encoding"];
-                delete options.headers["content-length"];
+            // 3) Нет реплея/локального файла -> пробуем реальный сервер (как раньше)
+            const options = {
+                hostname,
+                port: targetPort,
+                path: proxyReq.url,
+                method: proxyReq.method,
+                headers: {...proxyReq.headers}
+            };
+            delete options.headers['accept-encoding'];
+            delete options.headers['content-length'];
 
-                // 3. Создаём запрос к реальному серверу
-                const realReq = https.request(options, (realRes) => {
-                    const resChunks = [];
+            const realReq = https.request(options, (realRes) => {
+                const chunks = [];
+                realRes.on('data', c => chunks.push(c));
+                realRes.on('end', () => {
+                    const resBody = Buffer.concat(chunks);
 
-                    realRes.on("data", (chunk) => {
-                        resChunks.push(chunk);
-                    });
-                    let handled = false;
+                    // Логика сохранения/логирования, как у тебя
+                    const contentType = realRes.headers['content-type'] || '';
+                    const isXHR =
+                        contentType.includes('json') ||
+                        contentType.includes('text/plain') ||
+                        proxyReq.headers['x-requested-with'] === 'XMLHttpRequest' ||
+                        proxyReq.headers['sec-fetch-dest'] === 'empty' ||
+                        contentType.includes('application/xml');
 
-                    const handleResponse = function () {
-                        if (handled) return;
-                        handled = true;
-                        const resBody = Buffer.concat(resChunks);
-
-                        const requestUrl = (() => {
+                    if (SESSION_PATH != null) {
+                        if (isXHR) {
+                            const resLog = safeBodyToLog(resBody, contentType, 20000);
+                            netLogService.logRequest({
+                                method: proxyReq.method,
+                                url: requestUrl,
+                                status: realRes.statusCode,
+                                contentType,
+                                filePath: null,
+                                response: resLog.body,
+                                sessionId: SESSION_ID
+                            });
+                        } else {
                             try {
-                                return new URL("https://" + hostname + proxyReq.url).toString();
-                            } catch (e) {
-                                return `https://${hostname}${proxyReq.url}`;
-                            }
-                        })();
-                        console.log('Going to process request: ', requestUrl)
-
-                        if (SESSION_PATH != null) {
-                            const contentType = realRes.headers["content-type"] || "";
-                            // --- фильтр: логируем только XHR/fetch ---
-                            const isXHR =
-                                contentType.includes("json") ||
-                                contentType.includes("text/plain") ||
-                                proxyReq.headers["x-requested-with"] === "XMLHttpRequest" ||
-                                proxyReq.headers["sec-fetch-dest"] === "empty" ||
-                                contentType.includes("application/xml");
-
-                            if (isXHR) {
-                                // ⚡ сохраняем только в БД, response как текст
-                                const resLog = safeBodyToLog(resBody, contentType, 20000); // ограничим до 20KB
+                                const urlObj = new URL(requestUrl);
+                                const saved = saveStaticFile(urlObj.hostname, urlObj.pathname, resBody, contentType);
                                 netLogService.logRequest({
                                     method: proxyReq.method,
                                     url: requestUrl,
                                     status: realRes.statusCode,
                                     contentType,
-                                    filePath: null,
-                                    response: resLog.body,
+                                    filePath: saved,
+                                    response: null,
                                     sessionId: SESSION_ID
                                 });
-                            } else {
-                                try {
-                                    const urlObj = new URL("https://" + hostname + proxyReq.url);
-                                    const savedPath = saveStaticFile(
-                                        urlObj.hostname,
-                                        urlObj.pathname,
-                                        resBody,
-                                        contentType
-                                    );
-
-                                    netLogService.logRequest({
-                                        method: proxyReq.method,
-                                        url: requestUrl,
-                                        status: realRes.statusCode,
-                                        contentType,
-                                        filePath: savedPath,
-                                        response: null,
-                                        sessionId: SESSION_ID
-                                    });
-                                } catch (e) {
-                                    console.error("Save failed:", e.message);
-                                }
-                            }
-                        }
-
-                        if (REPLAY_SESSION_NET_LOG != null) {
-                            let netLog = REPLAY_SESSION_NET_LOG.find(netLog => netLog.url === requestUrl);
-                            if (netLog != null) {
-                                console.log('Going to restore response from db: ', netLog)
-                                sendNetLogResponse(netLog, proxyRes)
-                            } else {
-                                // Отдаём клиенту
-                                proxyRes.writeHead(realRes.statusCode, realRes.headers);
-                                proxyRes.end(resBody);
-                            }
-                        } else {
-                            // Отдаём клиенту
-                            proxyRes.writeHead(realRes.statusCode, realRes.headers);
-                            proxyRes.end(resBody);
+                            } catch (e) { console.error('Save failed', e); }
                         }
                     }
 
-                    realRes.on("end", handleResponse);
-                    realRes.on("close", handleResponse);
-                    realRes.on("error", (err) => {
-                        console.error("Real response error:", err);
-                        proxyRes.writeHead(502);
-                        proxyRes.end("Bad Gateway");
-                    });
+                    proxyRes.writeHead(realRes.statusCode, realRes.headers);
+                    proxyRes.end(resBody);
                 });
-
-                // 4. Пробрасываем тело запроса (POST/PUT и т.п.)
-                proxyReq.pipe(realReq);
-
-                // 5. Обработка ошибок
-                realReq.on("error", (err) => {
-                    console.error("Real request error:", err);
-                    proxyRes.writeHead(500);
-                    proxyRes.end("Internal Proxy Error");
+                realRes.on('error', (err) => {
+                    console.error('realRes error', err);
+                    proxyRes.writeHead(502);
+                    proxyRes.end('Bad Gateway');
                 });
             });
 
+            proxyReq.pipe(realReq);
+            realReq.on('error', (err) => {
+                console.error('realReq error', err);
+                // если реального соединения нет - вернуть 504 или попытаться отдать заглушку
+                proxyRes.writeHead(504);
+                proxyRes.end('Gateway Timeout (no network)');
+            });
+        });
 
-            fakeServer.listen(0, () => {
-                const {port: fakePort} = fakeServer.address();
-                clientSocket.write('HTTP/1.1 200 OK\r\n\r\n');
+        // Запускаем локальный fakeServer на произвольном порту и свяжем clientSocket с ним
+        fakeServer.listen(0, '127.0.0.1', () => {
+            const { port: fakePort } = fakeServer.address();
+            clientSocket.write('HTTP/1.1 200 OK\r\n\r\n');
 
-                const proxySocket = net.connect(fakePort, '127.0.0.1');
-                proxySocket.write(head);
-
-                // 9. Проброс трафика между клиентом и сервером
+            const proxySocket = net.connect(fakePort, '127.0.0.1', () => {
+                // Пре-отправляем head, затем пайп
+                if (head && head.length) proxySocket.write(head);
                 clientSocket.pipe(proxySocket).pipe(clientSocket);
             });
-        });
 
-        serverSocket.on('error', (err) => {
-            console.error('Target connection error:', err);
-            clientSocket.end();
-        });
+            proxySocket.on('error', (err) => {
+                console.error('proxySocket error', err);
+                clientSocket.end();
+            });
 
-        clientSocket.on('error', (err) => {
-            console.error('Client connection error:', err);
+            clientSocket.on('error', (err) => {
+                console.error('clientSocket error', err);
+                proxySocket.end();
+            });
         });
     });
+
 
     return new Promise((resolve) => {
         server.listen(port, () => {
@@ -503,5 +494,6 @@ module.exports = {
     createProxyServer,
     openSession,
     closeSession,
-    replaySession
+    replaySession,
+    stopReplayingSession
 };
