@@ -39,7 +39,7 @@
     "demo"
   ],
   "devDependencies": {
-    "electron": "^34.0.0",
+    "electron": "^39.2.4",
     "electron-builder": "^26.0.12",
     "electron-installer-dmg": "^4.0.0",
     "electron-packager": "^17.1.2",
