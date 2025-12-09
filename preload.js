@@ -16,5 +16,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
         stopReplayingSession: (sessionId) => ipcRenderer.invoke('session:stop_replay', sessionId)
     },
     getHighlighterCode: () => highlighterCode,
-    forwardHtmlSelection: (detail) => ipcRenderer.invoke('prompt:content', detail)
+    forwardHtmlSelection: (detail, sessionId) => ipcRenderer.invoke('prompt:content', detail, sessionId)
 });

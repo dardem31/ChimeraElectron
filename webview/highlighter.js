@@ -1,5 +1,6 @@
 (() => {
     let highLighterClickHandlerFn = null;
+    let sessionActions = []
     try {
         if (window.__chimeraHighlighterInstalled) return;
         window.__chimeraHighlighterInstalled = true;
@@ -146,9 +147,10 @@
                 if (!selectedElement) return;
 
                 // Создаём событие для отправки на backend
-                const customEvent = new CustomEvent("chimera-element-selected", {
+                const customEvent = new CustomEvent("submit-prompt", {
                     detail: {selectedElement: selectedElement, userCommand: command}
                 });
+                console.log({selectedElement: selectedElement, userCommand: command})
                 window.dispatchEvent(customEvent);
 
                 // Скрываем модалку
@@ -157,24 +159,29 @@
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') submitBtn.click();
             });
-            highLighterClickHandlerFn = function (e) {
+            highLighterClickHandlerFn = async function (e) {
+                console.log('TEST')
                 e.preventDefault();
                 e.stopPropagation();
                 const el = document.elementFromPoint(e.clientX, e.clientY);
-                if (!el) return;
+                if (!el) {
+                    console.log('Failed to get element on click!', e)
+                    return;
+                }
 
                 const selectedElement = {
                     outerHTML: el.outerHTML,
                     selector: getUniqueSelector(el),
                     tagName: el.tagName,
-                    id: el.id || null,
                     classList: Array.from(el.classList),
                     inlineStyle: el.getAttribute("style"),
                     computedStyle: getComputedStyleObject(el),
-                    parentHTML: el.parentElement ? el.parentElement.outerHTML : null
+                    parentHTML: el.parentElement ? el.parentElement.outerHTML : null,
+                    hash: await hashElement(el)
                 };
 
                 // Показываем модалку и фокус на input
+                console.log('Going to show ai modal', aiModal)
                 aiModal.style.display = 'flex';
                 input.value = '';
                 input.focus();
@@ -183,8 +190,7 @@
                 aiModal.__selectedElement = selectedElement;
             };
 
-           document.addEventListener("click", highLighterClickHandlerFn);
-
+            document.addEventListener("mousedown", highLighterClickHandlerFn, { passive: true });
 
             function getUniqueSelector(el) {
                 if (!(el instanceof Element)) return null;
@@ -241,6 +247,103 @@
                 document.removeEventListener("click", highLighterClickHandlerFn);
             }
 
+        }
+
+        window.addEventListener("message", (event) => {
+            const type = event.data.type;
+            const payload = event.data.payload;
+            if (type != null && payload != null) {
+                switch (type) {
+                    case 'prompt-response': {
+                        console.log('Prompt response: ', payload)
+                        if (payload.type === 'JS_ACTION') {
+                            eval(payload.jsCode)
+                        }
+                        break
+                    }
+                    case 'preload-session-actions': {
+                        console.log(payload)
+                        applyActions(payload)
+                        break
+                    }
+                }
+            }
+        });
+        async function applyActions(sessionActions) {
+            let notUsedActions = [];
+            for (let action of sessionActions) {
+                let selector = action.selector;
+                let hash = action.elementHash;
+                let element = document.querySelector(selector);
+                if (element != null) {
+                    let elementHash = await hashElement(element);
+                    if (hash === elementHash) {
+                        let instruction = JSON.parse(action.instruction);
+                        eval(instruction.jsCode);
+                        continue;
+                    }
+                }
+                notUsedActions.push(action)
+            }
+            sessionActions = notUsedActions;
+            if (sessionActions.length !== 0) {
+                setTimeout(function () {
+                    applyActions(sessionActions)
+                }, 1000)
+            }
+        }
+
+        async function hashElement(el) {
+            function getElementPath(node) {
+                const path = [];
+                while (node && node !== document.body && node.nodeType === Node.ELEMENT_NODE) {
+                    const tag = node.tagName;
+
+                    // Определяем индекс среди элементов с тем же тегом
+                    const siblings = Array.from(node.parentNode?.children || [])
+                        .filter(n => n.tagName === tag);
+
+                    const index = siblings.indexOf(node);
+
+                    path.unshift(`${tag}[${index}]`);
+                    node = node.parentNode;
+                }
+                // Включаем BODY как корень
+                path.unshift("BODY");
+                return path.join("/");
+            }
+
+            function stableMinimalIdentity(node) {
+                return {
+                    tag: node.tagName,
+                    id: node.id || null,
+                    classes: node.classList.length
+                        ? Array.from(node.classList).sort()
+                        : null
+                };
+            }
+
+            const payload = JSON.stringify({
+                path: getElementPath(el),
+                identity: stableMinimalIdentity(el)
+            });
+
+            // SHA-256 HEX (работает и в Electron)
+            if (window.crypto && crypto.subtle) {
+                const buf = await crypto.subtle.digest(
+                    "SHA-256",
+                    new TextEncoder().encode(payload)
+                );
+                return Array.from(new Uint8Array(buf))
+                    .map(x => x.toString(16).padStart(2, "0"))
+                    .join("");
+            }
+
+            // fallback (Node / старые браузеры)
+            const cryptoNode = require("crypto");
+            let result = await cryptoNode.createHash("sha256").update(payload).digest("hex");
+            console.log(`Generated hash element ${result}`)
+            return result;
         }
 
     } catch (err) {

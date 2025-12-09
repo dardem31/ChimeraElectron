@@ -44,12 +44,14 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 });
 webview.addEventListener("ipc-message", async (event) => {
-    if (event.channel === "chimera-element-selected") {
+    if (event.channel === "submit-prompt") {
+
         const detail = event.args[0];
+        console.log(window.loadedSessionId)
         console.log("[chimera] Element info received from webview:", detail);
         try {
             // Отправляем на backend через electronAPI (preload)
-            const response = await window.electronAPI.forwardHtmlSelection(detail);
+            const response = await window.electronAPI.forwardHtmlSelection(detail, window.loadedSessionId);
             if (!response.success) {
                 throw new Error('Failed to process prompt!')
             }
@@ -58,15 +60,10 @@ webview.addEventListener("ipc-message", async (event) => {
             console.log("[chimera] Response from AI:", result);
 
             // Проверяем, что модель вернула JS_ACTION
-            if (result?.type === "JS_ACTION" && result.jsCode) {
-                // Выполняем JS в webview
-                webview.executeJavaScript(result.jsCode)
-                    .then(() => console.log("[chimera] JS executed successfully"))
-                    .catch(err => console.error("[chimera] Error executing JS:", err));
-            } else if (result?.type === "ERROR") {
+            if (result?.type === "ERROR") {
                 console.error("[chimera] AI returned error:", result.message);
             } else {
-                console.log("[chimera] AI response type:", result?.type);
+                webview.send("highlighter-response-channel", {type: 'prompt-response', payload: result});
             }
         } catch (err) {
             console.error("[chimera] Failed to process AI response:", err);

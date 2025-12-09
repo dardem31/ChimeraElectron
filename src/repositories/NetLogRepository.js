@@ -1,7 +1,6 @@
 // repositories/NetLogRepository.js
 const NetLog = require("../models/NetLog");
 const db = require("../db");
-const Session = require("../models/Session");
 
 class NetLogRepository {
     constructor() {

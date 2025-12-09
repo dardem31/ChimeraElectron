@@ -10,8 +10,13 @@ window.addEventListener("DOMContentLoaded", () => {
     document.body.appendChild(script);
 
     // слушаем клики от highlighter.js
-    window.addEventListener("chimera-element-selected", (e) => {
+    window.addEventListener("submit-prompt", (e) => {
         const html = e.detail;
-        ipcRenderer.sendToHost("chimera-element-selected", html);
+        ipcRenderer.sendToHost("submit-prompt", html);
+    });
+    ipcRenderer.on('highlighter-response-channel', (event, payload) => {
+        console.log('highlighter-response-channel', payload)
+        // Доставляем в highlighter.js
+        window.postMessage(payload, "*");
     });
 });

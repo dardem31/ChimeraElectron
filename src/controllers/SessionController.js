@@ -5,6 +5,7 @@ const {
     stopReplayingSession
 } = require('../cert_utils/proxy-server');
 const sessionService = require("../services/SessionService");
+const sessionActionsService = require("../services/SessionActionService")
 
 class SessionController {
     startSession(event, name, url) {
@@ -41,6 +42,7 @@ class SessionController {
     replaySession(event, sessionId) {
         try {
             let session = sessionService.findById(sessionId);
+            session.sessionActions = sessionActionsService.getAllSessionActions(sessionId);
             console.log(session)
             replaySession(session)
             return {success: true, session: session};

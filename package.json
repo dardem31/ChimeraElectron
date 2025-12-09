@@ -29,7 +29,9 @@
     },
     "linux": {
       "icon": "assets/icons/png",
-      "target": ["AppImage"]
+      "target": [
+        "AppImage"
+      ]
     }
   },
   "keywords": [

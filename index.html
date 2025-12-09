@@ -203,20 +203,27 @@
                     replayBtn.title = "Replay this session";
                     replayBtn.addEventListener("click", async (e) => {
                         e.stopPropagation();
+                        window.loadedSessionId = session.id;
                         let replaySessionResponse = await window.electronAPI.sessionManagement.replaySession(session.id);
                         let replaySession = replaySessionResponse.session;
                         console.log("Replaying session:", replaySession);
                         webview.src = replaySession.url;
-                        webview.addEventListener('dom-ready', () => {
+                        const onDomReadyFn = () => {
                             // Внедряем скрипт highlighter.js
                             webview.executeJavaScript(window.electronAPI.getHighlighterCode()).catch(err => console.error('Failed to inject script:', err));
-                        });
+                        }
+                        webview.addEventListener('dom-ready', onDomReadyFn);
                         sessionsDialog.close();
                         let stopReplayingFn = function () {
                             window.electronAPI.sessionManagement.stopReplayingSession(session.id);
                             homeButton.removeEventListener("click", stopReplayingFn)
+                            webview.removeEventListener('dom-ready', onDomReadyFn)
                         }
                         homeButton.addEventListener("click", stopReplayingFn)
+                        setTimeout(function () {
+                            console.log("Replaying session actions:", replaySession.sessionActions);
+                            webview.send("highlighter-response-channel", {type: 'preload-session-actions', payload: replaySession.sessionActions});
+                        }, 2500)
                     });
 
                     // 🔹 Open button (navigate directly)
